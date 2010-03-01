@@ -16,7 +16,7 @@
  *
  * @package Jelly
  */
-abstract class Jelly_Builder_Core extends Kohana_Database_Query_Builder_Select
+abstract class Jelly_Builder_Core extends Kohana_Database_Query_Builder_Select implements Iterator, Countable, SeekableIterator, ArrayAccess
 {	
 	/**
 	 * @var string The inital model used to construct the builder
@@ -52,6 +52,11 @@ abstract class Jelly_Builder_Core extends Kohana_Database_Query_Builder_Select
 	 * @var boolean The result, if the query has been executed
 	 */
 	protected $_result = NULL;
+	
+	/**
+	 * @var	Jelly_Model Instance of model populated and returned whilst iterating
+	 */
+	protected $_model_instance = NULL;
 	
 	/**
 	 * Constructs a new Jelly_Builder instance. 
@@ -114,24 +119,16 @@ abstract class Jelly_Builder_Core extends Kohana_Database_Query_Builder_Select
 			
 			// We've now left the Jelly
 			$this->_result = $this->_build()->execute($db);
-			
-			// Hand it over to Jelly_Collection if it's a select
-			if ($this->_type === Database::SELECT)
-			{
-				$model = ($this->_meta) ? $this->_meta->model() : NULL;
-				$this->_result = new Jelly_Collection($model, $this->_result);
-				
-				// If the record was limited to 1, we only return that model
-				// Otherwise we return the whole result set.
-				if ($this->_limit === 1)
-				{
-					$this->_result = $this->_result->current();
-				}
-			}
 		}
 		
-		// Hand off the result to the Jelly_Collection
-		return $this->_result;
+		// If result is a model instance, return it directly
+		if ($this->_type === Database::SELECT AND $this->_limit === 1)
+		{
+			return $this->current();
+		}
+		
+		// Return $this for iteration over result set
+		return $this;
 	}
 	
 	/**
@@ -150,7 +147,7 @@ abstract class Jelly_Builder_Core extends Kohana_Database_Query_Builder_Select
 	 *
 	 * @return int
 	 */
-	public function count()
+	public function count_results()
 	{
 		$query = $this->_build(Database::SELECT);
 		$db = (is_object($this->_meta)) ? $this->_meta->db() : 'default';
@@ -586,6 +583,9 @@ abstract class Jelly_Builder_Core extends Kohana_Database_Query_Builder_Select
 		{
 			$this->from($this->_model);
 		}
+		
+		// Create an empty instance to return while iterating
+		$this->_model_instance = Jelly::factory($this->_model);
 	}
 	
 	/**
@@ -796,5 +796,143 @@ abstract class Jelly_Builder_Core extends Kohana_Database_Query_Builder_Select
 		}
 		
 		return $query;
+	}
+	
+	/**
+	 * Implementation of the Iterator interface
+	 * @return $this
+	 */
+	public function rewind() 
+	{
+		// Rewind is the first interface method called when iterating, 
+		// ensure we have executed the query
+		$this->execute();
+		
+		$this->_result->rewind();
+		return $this;
+    }
+
+	/**
+	 * Implementation of the Iterator interface
+	 * @return Jelly
+	 */
+    public function current($object = TRUE) 
+	{	
+		// Database_Result causes errors if you call current() 
+		// on an object with no results, so we check first.	
+		if ($this->_result->count())
+		{
+			$result = $this->_result->current();
+		}
+		else
+		{
+			$result = array();
+		}
+		
+		if ($object AND $this->_model_instance)
+		{
+			// Don't return models when we don't have one
+			$result = ($result) 
+			        ? $this->_model_instance->load_values($result, TRUE) 
+			        : $this->_model_instance->clear();
+		}
+		
+		return $result;
+    }
+
+	/**
+	 * Implementation of the Iterator interface
+	 * @return int
+	 */
+    public function key() 
+	{
+        return $this->_result->key();
+    }
+
+	/**
+	 * Implementation of the Iterator interface
+	 * @return $this
+	 */
+    public function next() 
+	{
+        $this->_result->next();
+		return $this;
+    }
+
+	/**
+	 * Implementation of the Iterator interface
+	 * @return boolean
+	 */
+    public function valid() 
+	{
+		return $this->_result->valid();
+    }
+
+	/**
+	 * Implementation of the Countable interface
+	 * @return boolean
+	 */
+    public function count() 
+	{
+		// Must do query before we can count
+		$this->execute();
+		
+		return $this->_result->count();
+    }
+
+	/**
+	 * Implementation of SeekableIterator
+	 *
+	 * @param  mixed   $offset 
+	 * @return boolean
+	 */
+	public function seek($offset)
+	{
+		// Must do query before we can seek
+		//$this->execute();
+		
+		return $this->_result->seek($offset);
+	}
+
+	/**
+	 * ArrayAccess: offsetExists
+	 */
+	public function offsetExists($offset)
+	{
+		// Must do query before we can get at results
+		$this->execute();
+		
+		return $this->_result->offsetExists($offset);
+	}
+
+	/**
+	 * ArrayAccess: offsetGet
+	 */
+	public function offsetGet($offset)
+	{
+		// Must do query before we can get at results
+		$this->execute();
+		
+		return $this->_result->offsetGet($offset);
+	}
+
+	/**
+	 * ArrayAccess: offsetSet
+	 *
+	 * @throws  Kohana_Exception
+	 */
+	final public function offsetSet($offset, $value)
+	{
+		throw new Kohana_Exception('Jelly Collections are read-only');
+	}
+
+	/**
+	 * ArrayAccess: offsetUnset
+	 *
+	 * @throws  Kohana_Exception
+	 */
+	final public function offsetUnset($offset)
+	{
+		throw new Kohana_Exception('Jelly Collections are read-only');
 	}
 }
